@@ -1,0 +1,67 @@
+# Istio control plane, tuned down for a laptop cluster.
+pilot:
+  autoscaleEnabled: false
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  # Pods are set up by the CNI node agent (cni-values.yaml) instead of a
+  # privileged istio-init container.
+  cni:
+    enabled: true
+  env:
+    # Envoy fetches JWKS itself, over mTLS through the mesh, instead of istiod
+    # fetching it in plaintext. Keycloak can then keep STRICT mTLS.
+    PILOT_JWT_ENABLE_REMOTE_JWKS: envoy
+meshConfig:
+  # Every request gets a JSON access log line in the sidecar (kubectl logs <pod> -c istio-proxy),
+  # shipped to Elasticsearch by Filebeat -> Logstash. traceparent links each line to its trace;
+  # downstream_peer is the caller's mTLS identity (useful when reading RBAC denials).
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  accessLogFormat: |
+    {
+      "start_time": "%START_TIME%",
+      "method": "%REQ(:METHOD)%",
+      "path": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+      "protocol": "%PROTOCOL%",
+      "response_code": "%RESPONSE_CODE%",
+      "response_flags": "%RESPONSE_FLAGS%",
+      "response_code_details": "%RESPONSE_CODE_DETAILS%",
+      "bytes_received": "%BYTES_RECEIVED%",
+      "bytes_sent": "%BYTES_SENT%",
+      "duration": "%DURATION%",
+      "upstream_service_time": "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%",
+      "request_id": "%REQ(X-REQUEST-ID)%",
+      "traceparent": "%REQ(TRACEPARENT)%",
+      "authority": "%REQ(:AUTHORITY)%",
+      "user_agent": "%REQ(USER-AGENT)%",
+      "upstream_host": "%UPSTREAM_HOST%",
+      "upstream_cluster": "%UPSTREAM_CLUSTER%",
+      "downstream_peer": "%DOWNSTREAM_PEER_URI_SAN%",
+      "upstream_peer": "%UPSTREAM_PEER_URI_SAN%",
+      "route_name": "%ROUTE_NAME%"
+    }
+  # Tracing backends that Telemetry resources can select. The ingress gateway uses
+  # this to emit the edge span of every trace (deploy/observability/mesh/telemetry.yaml).
+  extensionProviders:
+    - name: otel-tracing
+      opentelemetry:
+        service: otel-collector.observability.svc.cluster.local
+        port: 4317
+  # Only allow calls to services registered in the mesh.
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+  defaultConfig:
+    # App container waits for the sidecar to be ready before starting.
+    holdApplicationUntilProxyStarts: true
+global:
+  proxy:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi

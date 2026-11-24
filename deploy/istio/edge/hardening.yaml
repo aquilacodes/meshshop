@@ -1,0 +1,137 @@
+# Edge hardening for the ingress gateway that Istio has no first-class API for.
+#
+# 1. Drop client-supplied trace context and identity headers before anything
+#    reads them (early header mutation runs before tracing and routing). Every
+#    request starts a new trace at the gateway; clients learn its id from the
+#    `traceresponse` response header.
+# 2. Rate-limit every request (token bucket per gateway pod), before JWT checks,
+#    so floods are cheap to reject. Checkout gets a tighter bucket (route patch).
+# 3. Envoy-generated responses (404 no route, 401/403 auth, 429, 503 no healthy
+#    upstream) use the API's JSON error envelope and leak no Envoy internals.
+# 4. No `server` header (PASS_THROUGH + the route removes the upstream one).
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: edge-hardening
+  namespace: istio-ingress
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: NETWORK_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            server_header_transformation: PASS_THROUGH
+            early_header_mutation_extensions:
+              - name: envoy.http.early_header_mutation.header_mutation
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.http.early_header_mutation.header_mutation.v3.HeaderMutation
+                  mutations:
+                    - remove: traceparent
+                    - remove: tracestate
+                    - remove: baggage
+                    - remove: b3
+                    - remove: x-b3-traceid
+                    - remove: x-b3-spanid
+                    - remove: x-b3-parentspanid
+                    - remove: x-b3-sampled
+                    - remove: x-b3-flags
+                    - remove: x-ot-span-context
+                    - remove: uber-trace-id
+                    - remove: x-user-id
+            local_reply_config:
+              mappers:
+                - filter:   # RBAC denial at the edge = request without a token (require-jwt)
+                    status_code_filter:
+                      comparison: { op: EQ, value: { default_value: 403, runtime_key: edge_lr_403 } }
+                  status_code: 401
+                  headers_to_add:
+                    - header: { key: www-authenticate, value: 'Bearer realm="meshshop"' }
+                      append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  body_format_override:
+                    json_format: { error: { code: unauthorized, message: "sign in required" } }
+                - filter:
+                    status_code_filter:
+                      comparison: { op: EQ, value: { default_value: 401, runtime_key: edge_lr_401 } }
+                  headers_to_add:
+                    - header: { key: www-authenticate, value: 'Bearer realm="meshshop", error="invalid_token"' }
+                      append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  body_format_override:
+                    json_format: { error: { code: unauthorized, message: "invalid or expired token" } }
+                - filter:
+                    status_code_filter:
+                      comparison: { op: EQ, value: { default_value: 429, runtime_key: edge_lr_429 } }
+                  body_format_override:
+                    json_format: { error: { code: rate_limited, message: "too many requests, slow down" } }
+                - filter:
+                    status_code_filter:
+                      comparison: { op: EQ, value: { default_value: 404, runtime_key: edge_lr_404 } }
+                  body_format_override:
+                    json_format: { error: { code: not_found, message: "not found" } }
+                - filter:
+                    status_code_filter:
+                      comparison: { op: GE, value: { default_value: 500, runtime_key: edge_lr_5xx } }
+                  body_format_override:
+                    json_format: { error: { code: unavailable, message: "service temporarily unavailable, please retry" } }
+              body_format:   # anything else Envoy generates
+                json_format: { error: { code: request_rejected, message: "request rejected" } }
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: INSERT_FIRST
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: edge_rate_limit
+            token_bucket: { max_tokens: 100, tokens_per_fill: 50, fill_interval: 1s }
+            filter_enabled:
+              runtime_key: edge_rate_limit_enabled
+              default_value: { numerator: 100, denominator: HUNDRED }
+            filter_enforced:
+              runtime_key: edge_rate_limit_enforced
+              default_value: { numerator: 100, denominator: HUNDRED }
+            enable_x_ratelimit_headers: DRAFT_VERSION_03
+            response_headers_to_add:
+              - header: { key: retry-after, value: "1" }
+                append_action: OVERWRITE_IF_EXISTS_OR_ADD
+    - applyTo: HTTP_ROUTE   # the "checkout" route of the web-bff-edge VirtualService
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: checkout
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: edge_checkout_rate_limit
+              token_bucket: { max_tokens: 20, tokens_per_fill: 5, fill_interval: 1s }
+              filter_enabled:
+                runtime_key: edge_checkout_rate_limit_enabled
+                default_value: { numerator: 100, denominator: HUNDRED }
+              filter_enforced:
+                runtime_key: edge_checkout_rate_limit_enforced
+                default_value: { numerator: 100, denominator: HUNDRED }
+              enable_x_ratelimit_headers: DRAFT_VERSION_03
+              response_headers_to_add:
+                - header: { key: retry-after, value: "1" }
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: meshshop
+  labels:
+    istio-injection: enabled   # every pod gets an Envoy sidecar
+    # With Istio CNI there is no privileged istio-init container, so every pod
+    # (app + sidecar) meets the "restricted" Pod Security Standard.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

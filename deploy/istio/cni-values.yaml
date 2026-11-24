@@ -1,0 +1,5 @@
+# Istio CNI node agent (chained after the cluster's primary CNI, Calico here).
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi

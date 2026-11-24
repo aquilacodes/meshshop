@@ -1,0 +1,76 @@
+# bff layer
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-bff   # the mesh identity: spiffe://cluster.local/ns/meshshop/sa/web-bff
+automountServiceAccountToken: false   # the app never calls the Kubernetes API; Istio mounts its own token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-bff
+  labels: &labels
+    app: web-bff
+    version: v1
+    meshshop.io/layer: bff
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-bff
+      version: v1
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: web-bff
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532        # the image's user (FROM scratch, USER 65532), stated explicitly
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: meshshop/web-bff:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: SHOPPING_URL, value: "http://shopping:8080" }
+            # Keycloak (deploy/identity). Tokens name the public issuer URL; the
+            # signing keys are fetched in-cluster through the mesh.
+            - { name: OIDC_ISSUER, value: "https://meshshop.localhost:8443/auth/realms/meshshop" }
+            - { name: OIDC_JWKS_URL, value: "http://keycloak.identity.svc.cluster.local:8080/auth/realms/meshshop/protocol/openid-connect/certs" }
+            - { name: OIDC_AUDIENCE, value: "meshshop-api" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 250m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-bff
+  labels:
+    app: web-bff
+    meshshop.io/layer: bff
+spec:
+  selector:
+    app: web-bff
+  ports:
+    - name: http         # the "http" name tells Istio the protocol
+      port: 8080
+      targetPort: http
+      appProtocol: http

@@ -1,0 +1,9 @@
+# Require mTLS for all traffic into the meshshop namespace. Plaintext
+# (e.g. a pod without a sidecar) is rejected.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+spec:
+  mtls:
+    mode: STRICT

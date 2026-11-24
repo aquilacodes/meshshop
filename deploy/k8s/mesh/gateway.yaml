@@ -1,0 +1,81 @@
+# North-south entry point: HTTPS only, for one host name. Plain HTTP redirects
+# to HTTPS. Only the BFF (/api/) and the Keycloak realm's public endpoints
+# (/auth/realms/meshshop/, for login and tokens) are routed from the edge;
+# the Keycloak admin console and the master realm are not.
+#
+# For local use the host is "meshshop.localhost" (RFC 6761: *.localhost is
+# loopback; port-forward 8443 -> 443, see
+# `make gateway`); in a real cluster set your domain here, in the certificate,
+# and in Keycloak's KC_HOSTNAME.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: meshshop-gateway
+spec:
+  selector:
+    istio: ingressgateway        # pods of the istio-ingressgateway Helm release
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts: ["meshshop.localhost"]
+      tls:
+        mode: SIMPLE
+        credentialName: meshshop-gateway-tls   # Secret in istio-ingress (scripts/certs.sh)
+        minProtocolVersion: TLSV1_2
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts: ["meshshop.localhost"]
+      tls:
+        httpsRedirect: true      # 301 to https://
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: web-bff-edge
+spec:
+  hosts: ["meshshop.localhost"]
+  gateways: ["meshshop-gateway"]
+  http:
+    - name: identity           # Keycloak: OIDC login, token, JWKS, static login-page assets
+      match:
+        - uri: { prefix: /auth/realms/meshshop/ }
+        - uri: { prefix: /auth/resources/ }
+      route:
+        - destination:
+            host: keycloak.identity.svc.cluster.local
+            port: { number: 8080 }
+      timeout: 10s
+      headers: &edgeHeaders
+        response:
+          set:
+            Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+          remove: [server, x-envoy-upstream-service-time]
+    - name: checkout           # own route so the gateway can rate-limit it harder (edge-hardening)
+      match:
+        - uri: { exact: /api/bag/checkout }
+          method: { exact: POST }
+      route:
+        - destination:
+            host: web-bff
+            port: { number: 8080 }
+      timeout: 10s
+      retries:
+        attempts: 0
+      headers: *edgeHeaders
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      route:
+        - destination:
+            host: web-bff
+            port:
+              number: 8080
+      timeout: 10s
+      retries:
+        attempts: 0                # BFF handles its own retries to downstreams
+      headers: *edgeHeaders

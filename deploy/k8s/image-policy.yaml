@@ -1,0 +1,38 @@
+# Only trusted images in the application namespaces: our own builds (built into
+# the node by `make build`) and Istio's proxy, which the injector adds. Checked by
+# the API server (ValidatingAdmissionPolicy, CEL) after sidecar injection.
+# In a real cluster, also require a signature (cosign + Sigstore policy-controller
+# or Kyverno verifyImages) and digests for app images from your registry.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: meshshop-trusted-images
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        (object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])
+          + (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : []))
+        .all(c, c.image.startsWith('meshshop/') || c.image.startsWith('registry.istio.io/release/'))
+      messageExpression: "'images must come from meshshop/ or registry.istio.io/release/, got: ' + object.spec.containers.map(c, c.image).join(', ')"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: meshshop-trusted-images
+spec:
+  policyName: meshshop-trusted-images
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [meshshop, identity]

@@ -1,0 +1,73 @@
+# business layer
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shopping   # the mesh identity: spiffe://cluster.local/ns/meshshop/sa/shopping
+automountServiceAccountToken: false   # the app never calls the Kubernetes API; Istio mounts its own token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopping
+  labels: &labels
+    app: shopping
+    version: v1
+    meshshop.io/layer: business
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shopping
+      version: v1
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: shopping
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532        # the image's user (FROM scratch, USER 65532), stated explicitly
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: meshshop/shopping:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: CATALOG_URL, value: "http://catalog:8080" }
+            - { name: INVENTORY_URL, value: "http://inventory:8080" }
+            - { name: ORDER_URL, value: "http://order:8080" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 250m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shopping
+  labels:
+    app: shopping
+    meshshop.io/layer: business
+spec:
+  selector:
+    app: shopping
+  ports:
+    - name: http         # the "http" name tells Istio the protocol
+      port: 8080
+      targetPort: http
+      appProtocol: http
