@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: meshshop
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: meshshop
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - image-policy.yaml
+  # BFF layer
+  - apps/web-bff.yaml
+  # business layer
+  - apps/shopping.yaml
+  # domain layer
+  - apps/catalog.yaml
+  - apps/inventory.yaml
+  - apps/order.yaml
+  # mesh
+  - mesh/peer-authentication.yaml
+  - mesh/authorization.yaml
+  - mesh/gateway.yaml
+  - mesh/virtual-services.yaml
+  - mesh/destination-rules.yaml
+  - mesh/network-policies.yaml
+patches:
+  # Tracing config for every service (OTLP endpoint, resource attributes).
+  - path: telemetry-env.yaml
+    target:
+      kind: Deployment

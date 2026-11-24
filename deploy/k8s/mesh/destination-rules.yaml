@@ -1,0 +1,110 @@
+# Per-service connection pool, outlier detection, and version subsets.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: web-bff
+spec:
+  host: web-bff
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 0
+    outlierDetection:            # eject a pod after repeated 5xx
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1                   # add v2 here for canary releases
+      labels: { version: v1 }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: shopping
+spec:
+  host: shopping
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 0
+    outlierDetection:            # eject a pod after repeated 5xx
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1                   # add v2 here for canary releases
+      labels: { version: v1 }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: catalog
+spec:
+  host: catalog
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 0
+    outlierDetection:            # eject a pod after repeated 5xx
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1                   # add v2 here for canary releases
+      labels: { version: v1 }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: inventory
+spec:
+  host: inventory
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 0
+    outlierDetection:            # eject a pod after repeated 5xx
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1                   # add v2 here for canary releases
+      labels: { version: v1 }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: order
+spec:
+  host: order
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 0
+    outlierDetection:            # eject a pod after repeated 5xx
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+    - name: v1                   # add v2 here for canary releases
+      labels: { version: v1 }

@@ -1,0 +1,71 @@
+# Layering enforced by the mesh. Each layer accepts calls only from the layer
+# directly above it, identified by its mTLS (SPIFFE) service-account identity:
+#
+#   ingress gateway --> bff --> business --> domain
+#
+# A BFF calling a domain service directly, or a domain service calling
+# another domain service, is rejected by the sidecar with 403 "RBAC: access denied".
+#
+# Health probes are rewritten by Istio to the sidecar's agent port, so they are
+# not affected by these policies.
+
+# 1. Deny everything in the namespace by default.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+spec: {}
+---
+# 2. BFF layer: only the ingress gateway, only /api/*.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: bff-from-gateway
+spec:
+  selector:
+    matchLabels:
+      meshshop.io/layer: bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/istio-ingress/sa/istio-ingressgateway"]
+      to:
+        - operation:
+            paths: ["/api/*"]
+---
+# 3. Business layer: only BFFs. Add new BFF service accounts here.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: business-from-bff
+spec:
+  selector:
+    matchLabels:
+      meshshop.io/layer: business
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/meshshop/sa/web-bff"]
+      to:
+        - operation:
+            paths: ["/v1/*"]
+---
+# 4. Domain layer: only business services. Domain services never call each other.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: domain-from-business
+spec:
+  selector:
+    matchLabels:
+      meshshop.io/layer: domain
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/meshshop/sa/shopping"]
+      to:
+        - operation:
+            paths: ["/v1/*"]

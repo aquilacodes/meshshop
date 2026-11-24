@@ -1,0 +1,19 @@
+# Applied to every Deployment: OpenTelemetry SDK settings (standard OTEL_* env vars).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: any   # replaced by the kustomize patch target
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.version=v1,deployment.environment=local,deployment.environment.name=local,k8s.namespace.name=meshshop,k8s.pod.name=$(POD_NAME),k8s.node.name=$(NODE_NAME)

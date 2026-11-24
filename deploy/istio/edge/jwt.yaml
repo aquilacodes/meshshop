@@ -1,0 +1,42 @@
+# Authentication at the edge: Keycloak access tokens (deploy/identity).
+#
+# - A request carrying a token is accepted only if the token is valid: signed by
+#   the realm's current key, issuer and audience match, not expired. Bad tokens
+#   get 401 here and never reach the BFF.
+# - /api/me/* and /api/bag/* additionally require a token (require-jwt).
+# - The token is forwarded so the BFF can verify it again and read the subject.
+#
+# The issuer is the public URL Keycloak puts in tokens (KC_HOSTNAME); the JWKS
+# is fetched in-cluster by Envoy over mTLS (PILOT_JWT_ENABLE_REMOTE_JWKS=envoy).
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: meshshop-jwt
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  jwtRules:
+    - issuer: https://meshshop.localhost:8443/auth/realms/meshshop
+      jwksUri: http://keycloak.identity.svc.cluster.local:8080/auth/realms/meshshop/protocol/openid-connect/certs
+      audiences: [meshshop-api]
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths: ["/api/me/*", "/api/me", "/api/bag/*"]
+      from:
+        - source:
+            notRequestPrincipals: ["*"]   # no valid token
