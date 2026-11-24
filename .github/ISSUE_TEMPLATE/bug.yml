@@ -1,0 +1,22 @@
+name: Bug
+description: Something does not work as documented
+labels: ["type:bug"]
+projects: ["aquilacodes/8"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Expected vs actual, with the request/response or log line.
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: make up && make gateway, then …
+    validations: { required: true }
+  - type: input
+    id: trace
+    attributes:
+      label: Trace id
+      description: From the `traceresponse` header, to find it in Kibana.

@@ -1,0 +1,22 @@
+name: Feature
+description: New capability in the services or the storefront API
+labels: ["type:feature"]
+projects: ["aquilacodes/6"]
+body:
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      options: [BFF, Business, Domain, Cross-cutting]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: The user-visible outcome and the reason for it.
+    validations: { required: true }
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Acceptance criteria, ideally as checks we can add to smoke.sh or Postman.

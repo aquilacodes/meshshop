@@ -1,0 +1,16 @@
+name: Platform / ops task
+description: Cluster, mesh, identity, observability, CI or tooling work
+labels: ["type:chore"]
+projects: ["aquilacodes/8"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Cluster, Mesh, Identity, Observability, CI/CD, Tooling]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+    validations: { required: true }

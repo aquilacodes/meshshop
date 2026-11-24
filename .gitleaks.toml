@@ -1,0 +1,13 @@
+# Default gitleaks rules, minus the deliberately forged JWTs that the tests and
+# the security regression suite send to prove the gateway and BFF reject them.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "forged test tokens (fake or missing signatures)"
+paths = [
+  '''scripts/security\.sh''',
+  '''services/bff/web/main_test\.go''',
+  '''postman/generate\.py''',
+  '''postman/meshshop\.postman_collection\.json''',
+]
