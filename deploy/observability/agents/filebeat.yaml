@@ -1,0 +1,109 @@
+# Filebeat DaemonSet: tails container logs on each node, adds Kubernetes
+# metadata (pod, namespace, labels such as meshshop.io/layer) and ships to
+# Logstash over mutual TLS.
+#
+# It lives in its own namespace because it needs hostPath volumes and root to
+# read /var/log/pods; that keeps "observability" at the baseline Pod Security level.
+apiVersion: beat.k8s.elastic.co/v1beta1
+kind: Beat
+metadata:
+  name: meshshop
+spec:
+  type: filebeat
+  version: 9.5.6
+  config:
+    filebeat.autodiscover:
+      providers:
+        - type: kubernetes
+          node: ${NODE_NAME}
+          templates:
+            - condition:
+                or:
+                  - equals: { kubernetes.namespace: meshshop }
+                  - equals: { kubernetes.namespace: istio-ingress }
+                  - equals: { kubernetes.namespace: istio-system }
+                  - equals: { kubernetes.namespace: identity }
+              config:
+                - type: filestream
+                  id: container-${data.kubernetes.container.id}
+                  prospector.scanner.symlinks: true
+                  parsers:
+                    - container:
+                        stream: all
+                        format: auto
+                  paths:
+                    - /var/log/containers/*-${data.kubernetes.container.id}.log
+    processors:
+      - drop_event:
+          when:
+            equals: { kubernetes.labels.meshshop_io/probe: "true" }
+    output.logstash:
+      hosts: ["meshshop-ls-beats.observability.svc:5044"]
+      ssl:
+        enabled: true
+        certificate_authorities: ["/etc/filebeat-tls/ca.crt"]
+        certificate: /etc/filebeat-tls/tls.crt
+        key: /etc/filebeat-tls/tls.key
+        verification_mode: full
+  daemonSet:
+    podTemplate:
+      spec:
+        serviceAccountName: filebeat
+        automountServiceAccountToken: true
+        terminationGracePeriodSeconds: 30
+        securityContext:
+          runAsUser: 0
+        containers:
+          - name: filebeat
+            env:
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef: { fieldPath: spec.nodeName }
+            resources:
+              requests: { cpu: 20m, memory: 100Mi }
+              limits: { cpu: 500m, memory: 300Mi }
+            volumeMounts:
+              - { name: varlogcontainers, mountPath: /var/log/containers }
+              - { name: varlogpods, mountPath: /var/log/pods }
+              - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers }
+              - { name: client-tls, mountPath: /etc/filebeat-tls, readOnly: true }
+        volumes:
+          - name: client-tls
+            secret:
+              secretName: filebeat-client-tls   # created by install.sh from .certs/
+          - name: varlogcontainers
+            hostPath: { path: /var/log/containers }
+          - name: varlogpods
+            hostPath: { path: /var/log/pods }
+          - name: varlibdockercontainers
+            hostPath: { path: /var/lib/docker/containers }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: filebeat
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: meshshop-filebeat
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes]
+    verbs: [get, watch, list]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: meshshop-filebeat
+subjects:
+  - kind: ServiceAccount
+    name: filebeat
+    namespace: observability-agents
+roleRef:
+  kind: ClusterRole
+  name: meshshop-filebeat
+  apiGroup: rbac.authorization.k8s.io

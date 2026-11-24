@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    # The stack runs outside the mesh: it must keep working when the mesh is broken.
+    # Its own TLS (ECK certificates), credentials and NetworkPolicies protect it.
+    istio-injection: disabled
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

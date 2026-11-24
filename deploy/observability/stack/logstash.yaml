@@ -1,0 +1,47 @@
+# Logstash: receives container logs from Filebeat, parses app JSON logs and
+# Envoy JSON access logs into ECS fields (incl. trace.id for log<->trace
+# correlation), and writes them to logs-meshshop.* data streams.
+apiVersion: logstash.k8s.elastic.co/v1alpha1
+kind: Logstash
+metadata:
+  name: meshshop
+spec:
+  version: 9.5.6
+  count: 1
+  elasticsearchRefs:
+    - name: meshshop
+      clusterName: es      # exposes ES_ES_HOSTS / _USER / _PASSWORD / _SSL_CERTIFICATE_AUTHORITY
+  config:
+    pipeline.workers: 1
+    pipeline.batch.size: 250
+    config.reload.automatic: true
+    config.reload.interval: 10s
+  pipelines:
+    - pipeline.id: meshshop
+      path.config: /usr/share/logstash/meshshop-pipeline/meshshop.conf
+  services:
+    - name: beats
+      service:
+        spec:
+          type: ClusterIP
+          ports:
+            - { name: beats, port: 5044, targetPort: 5044, protocol: TCP }
+  podTemplate:
+    spec:
+      containers:
+        - name: logstash
+          env:
+            - { name: LS_JAVA_OPTS, value: "-Xms512m -Xmx512m" }
+          resources:
+            requests: { cpu: 100m, memory: 1Gi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            - { name: pipeline, mountPath: /usr/share/logstash/meshshop-pipeline }
+            - { name: beats-tls, mountPath: /usr/share/logstash/beats-tls, readOnly: true }
+      volumes:
+        - name: pipeline
+          configMap:
+            name: logstash-pipeline
+        - name: beats-tls
+          secret:
+            secretName: logstash-beats-tls   # created by install.sh from .certs/
