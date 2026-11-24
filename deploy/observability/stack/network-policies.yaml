@@ -1,0 +1,115 @@
+# Who may reach what in the observability namespace (needs a NetworkPolicy-
+# enforcing CNI; the Makefile starts minikube with Calico). Port-forwards
+# (make kibana) enter the pod directly and are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# OTLP only from the workloads that produce traces.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-collector-ingress
+spec:
+  podSelector:
+    matchLabels: { app: otel-collector }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: meshshop }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-ingress }
+          podSelector:
+            matchLabels: { istio: ingressgateway }
+      ports:
+        - { protocol: TCP, port: 4317 }
+        - { protocol: TCP, port: 4318 }
+---
+# Beats input only from Filebeat (which must also present its client certificate).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: logstash-ingress
+spec:
+  podSelector:
+    matchLabels: { logstash.k8s.elastic.co/name: meshshop }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: observability-agents }
+          podSelector:
+            matchLabels: { beat.k8s.elastic.co/name: meshshop }
+      ports:
+        - { protocol: TCP, port: 5044 }
+    - from:   # the operator reads Logstash's API for status
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: elastic-system }
+      ports:
+        - { protocol: TCP, port: 9600 }
+---
+# APM intake only from the collector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apm-server-ingress
+spec:
+  podSelector:
+    matchLabels: { apm.k8s.elastic.co/name: meshshop }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: otel-collector }
+      ports:
+        - { protocol: TCP, port: 8200 }
+---
+# Elasticsearch only from the Elastic components and the ECK operator.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elasticsearch-ingress
+spec:
+  podSelector:
+    matchLabels: { elasticsearch.k8s.elastic.co/cluster-name: meshshop }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { kibana.k8s.elastic.co/name: meshshop }
+        - podSelector:
+            matchLabels: { apm.k8s.elastic.co/name: meshshop }
+        - podSelector:
+            matchLabels: { logstash.k8s.elastic.co/name: meshshop }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: elastic-system }
+      ports:
+        - { protocol: TCP, port: 9200 }
+    - from:   # node-to-node transport
+        - podSelector:
+            matchLabels: { elasticsearch.k8s.elastic.co/cluster-name: meshshop }
+      ports:
+        - { protocol: TCP, port: 9300 }
+---
+# Kibana: APM Server (agent configuration) and the operator. People use a port-forward.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kibana-ingress
+spec:
+  podSelector:
+    matchLabels: { kibana.k8s.elastic.co/name: meshshop }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { apm.k8s.elastic.co/name: meshshop }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: elastic-system }
+      ports:
+        - { protocol: TCP, port: 5601 }

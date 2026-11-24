@@ -1,0 +1,101 @@
+# OpenTelemetry Collector: the single OTLP endpoint for the mesh. Services and the
+# Istio ingress gateway send OTLP here; NetworkPolicy (network-policies.yaml)
+# admits only the meshshop and istio-ingress namespaces. The collector batches
+# and forwards to Elastic APM over TLS with the APM secret token. Swapping the
+# tracing backend means changing this file only.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      batch:
+        timeout: 2s
+    exporters:
+      otlphttp/elastic:
+        endpoint: https://meshshop-apm-http.observability.svc:8200
+        tls:
+          ca_file: /apm-ca/ca.crt          # ECK's CA for the APM Server certificate
+          min_version: "1.2"
+        headers:
+          Authorization: "Bearer ${env:APM_SECRET_TOKEN}"
+    service:
+      telemetry:
+        logs: { level: info }
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp/elastic]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp/elastic]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels: { app: otel-collector }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: otel-collector }
+  template:
+    metadata:
+      labels: { app: otel-collector }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector:0.165.0@sha256:34b24b740c3c88d3467740e8642a397c13898ef76d7295c5425164c482ed1b73
+          args: ["--config=/conf/config.yaml"]
+          env:
+            - name: APM_SECRET_TOKEN
+              valueFrom:
+                secretKeyRef: { name: meshshop-apm-token, key: secret-token }
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          volumeMounts:
+            - { name: conf, mountPath: /conf }
+            - { name: apm-ca, mountPath: /apm-ca, readOnly: true }
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      volumes:
+        - name: conf
+          configMap: { name: otel-collector }
+        - name: apm-ca
+          secret:
+            secretName: meshshop-apm-http-certs-public   # published by ECK
+            items: [{ key: ca.crt, path: ca.crt }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  selector: { app: otel-collector }
+  ports:
+    - { name: grpc-otlp, port: 4317, targetPort: otlp-grpc, appProtocol: grpc }
+    - { name: http-otlp, port: 4318, targetPort: otlp-http, appProtocol: http }

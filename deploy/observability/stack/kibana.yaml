@@ -1,0 +1,28 @@
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: meshshop
+spec:
+  version: 9.5.6
+  count: 1
+  elasticsearchRef:
+    name: meshshop
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true   # plain HTTP on the port-forward (localhost only)
+  config:
+    # Where the APM UI looks for logs to correlate with traces (matched on trace.id).
+    xpack.apm.ui.enabled: true
+    telemetry.optIn: false
+    telemetry.allowChangingOptInStatus: false
+    newsfeed.enabled: false
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          env:
+            - { name: NODE_OPTIONS, value: "--max-old-space-size=1024" }
+          resources:
+            requests: { cpu: 100m, memory: 1Gi }
+            limits: { cpu: "1", memory: 1536Mi }

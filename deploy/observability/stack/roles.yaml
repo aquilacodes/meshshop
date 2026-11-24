@@ -1,0 +1,21 @@
+# Elasticsearch role for the setup script (kibana/setup.sh): manage Kibana saved
+# objects and the meshshop log templates, nothing else. Read-only humans use
+# the built-in "viewer" role (see meshshop-viewer-user).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: meshshop-es-roles
+stringData:
+  roles.yml: |-
+    meshshop_setup:
+      cluster: [manage_index_templates, monitor]
+      indices:
+        - names: ["logs-meshshop.*"]
+          privileges: [manage, view_index_metadata]
+        # replica count only, on the APM and log data streams (see setup.sh)
+        - names: ["logs-*", "metrics-*", "traces-*"]
+          privileges: ["indices:admin/settings/update", view_index_metadata]
+      applications:
+        - application: kibana-.kibana
+          privileges: [all]
+          resources: ["*"]

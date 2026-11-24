@@ -1,0 +1,5 @@
+# ECK operator: manages Elasticsearch, Kibana, APM Server, Logstash and Beats via CRDs.
+managedNamespaces: [observability, observability-agents]
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }

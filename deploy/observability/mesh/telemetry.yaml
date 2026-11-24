@@ -1,0 +1,21 @@
+# Edge tracing: the ingress gateway starts every trace (100% sampling for local
+# dev) and sends its span to the OpenTelemetry Collector. The services continue
+# the trace with their own OpenTelemetry SDK spans.
+#
+# Sidecars inside meshshop deliberately have no tracer: they forward the
+# traceparent header untouched, so app spans link directly to each other and
+# the APM service map shows services, not proxies.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: edge-tracing
+  namespace: istio-ingress
+spec:
+  tracing:
+    - providers:
+        - name: otel-tracing
+      randomSamplingPercentage: 100
+      customTags:
+        meshshop.edge:
+          literal:
+            value: "true"
