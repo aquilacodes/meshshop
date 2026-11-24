@@ -1,0 +1,1701 @@
+{
+  "info": {
+    "_postman_id": "433bc136-0a49-56f2-aa43-5fac0419085b",
+    "name": "meshshop",
+    "description": "Requests for **meshshop**: a Go microservice shop on Kubernetes + Istio, with BFF → business → domain layering.\n\n## Setup\n1. `make gateway` (Istio ingress gateway, HTTPS on `https://meshshop.localhost:8443`).\n   The certificate is from the local CA in `.certs/ca.crt`: add it under Settings → Certificates → CA\n   certificates (newman: `--ssl-extra-ca-certs .certs/ca.crt`, as `make postman` does).\n2. Sign-in: requests use Keycloak tokens for the demo users **alice** and **bob**. Put their passwords\n   (`make users`) into `alicePassword` / `bobPassword` in the environment; `make postman` does it for you.\n3. Optional: `make kibana` (Kibana on `localhost:5601`) to follow each request's trace and logs\n4. Optional, for the *debug* folders: `make debug-ports` (port-forwards to the internal services)\n5. Select the **meshshop · local** environment, or just use the collection variables\n\n## Folders\n- **Storefront (via Istio gateway)**: the public API, through the real path\n  (HTTPS gateway → JWT check → mTLS → AuthorizationPolicy → web-bff → shopping → domain). Run it in order.\n- **Business / Domain (debug)**: the internal APIs of each layer, called directly through\n  `kubectl port-forward`. These skip the mesh, so use them for debugging a single service.\n\n## Tracing\nThe gateway starts a new trace for every request (it drops client-sent trace headers) and the\nresponse's `traceresponse` header names it. The Postman console prints the Kibana links for each request:\n- **APM**: the trace waterfall, `{{kibanaUrl}}/app/apm/link-to/trace/<traceId>`\n- **Logs**: Discover filtered on `trace.id` (app logs + Envoy access logs from every hop)\n\nThe same links are kept in the `lastTraceUrl` / `lastLogsUrl` collection variables.\n\n## CLI\n`make postman` runs the Storefront folder with newman; `make postman-debug` runs the debug folders.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Storefront (via Istio gateway)",
+      "id": "8b5f7592-26f9-509d-b2b4-1292bcb3fa4c",
+      "description": "The public API: `web-bff` behind the Istio ingress gateway (`make gateway` → `{{baseUrl}}`).\n\nRun the folder top to bottom (Collection Runner or `make postman`): **Home** picks an in-stock product, **Checkout** saves `orderId`, later requests use both.\n\nRequests are signed in as **alice** (`{{aliceToken}}`) or **bob** with Keycloak access tokens, fetched by the collection's pre-request script. Checkout needs an `Idempotency-Key`.",
+      "item": [
+        {
+          "name": "Home — product cards",
+          "id": "3b96d114-42cc-5339-a464-8fa3aaa4e3fa",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('matches the web view-model schema', () => pm.response.to.have.jsonSchema({\"type\": \"object\", \"required\": [\"title\", \"products\"], \"properties\": {\"title\": {\"type\": \"string\"}, \"products\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"required\": [\"id\", \"title\", \"subtitle\", \"price\", \"canAddToBag\"], \"properties\": {\"id\": {\"type\": \"string\"}, \"title\": {\"type\": \"string\"}, \"subtitle\": {\"type\": \"string\"}, \"price\": {\"type\": \"string\", \"pattern\": \"^\\\\$\\\\d+\\\\.\\\\d{2}$\"}, \"badge\": {\"type\": \"string\"}, \"canAddToBag\": {\"type\": \"boolean\"}}}}}}));",
+                  "pm.test('discontinued products are hidden', () =>",
+                  "    pm.expect(body.products.map(p => p.id)).to.not.include('p-104'));",
+                  "pm.test('sold-out products are badged and not buyable', () => {",
+                  "    body.products.filter(p => !p.canAddToBag).forEach(p => pm.expect(p.badge).to.eql('Sold out'));",
+                  "});",
+                  "const inStock = body.products.find(p => p.canAddToBag);",
+                  "pm.test('at least one product in stock (else: kubectl -n meshshop rollout restart deploy/inventory)',",
+                  "    () => pm.expect(inStock).to.be.an('object'));",
+                  "if (inStock) pm.collectionVariables.set('inStockProductId', inStock.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/home",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "home"
+              ]
+            },
+            "description": "Product cards shaped for the web UI: formatted price, stock badge, `canAddToBag`."
+          },
+          "response": []
+        },
+        {
+          "name": "Product details",
+          "id": "00df5011-0936-5f50-adc1-47cf251e704f",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('is the requested product', () =>",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('inStockProductId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{inStockProductId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "{{inStockProductId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Product — discontinued (404)",
+          "id": "c5eb914a-b94f-5a51-983f-846a2e5a4926",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: inactive products are not exposed', () => pm.response.to.have.status(404));",
+                  "pm.test('error code not_found', () => pm.expect(pm.response.json().error.code).to.eql('not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/p-104",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "products",
+                "p-104"
+              ]
+            },
+            "description": "`p-104` exists in the catalog but is inactive; the business layer hides it."
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout",
+          "id": "9fe6d62c-9742-5bd7-ac1b-8dfbd44b215f",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('checkoutKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const { order, message } = pm.response.json();",
+                  "pm.test('order is confirmed', () => pm.expect(order.status).to.eql('confirmed'));",
+                  "pm.test('total is formatted for display', () => pm.expect(order.total).to.match(/^\\$\\d+\\.\\d{2}$/));",
+                  "pm.test('item count matches the bag', () => pm.expect(order.itemCount).to.eql(1));",
+                  "pm.test('friendly message', () => pm.expect(message).to.include('confirmed'));",
+                  "pm.collectionVariables.set('orderId', order.orderId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{checkoutKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"{{inStockProductId}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Runs the checkout saga: price (catalog) → reserve stock (inventory) → create order → commit stock → confirm order. Open the APM link in the console to see each step as a span."
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — retry with the same Idempotency-Key (200)",
+          "id": "7814c61d-5cd9-55eb-8cad-b04309ca9395",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200: the earlier order, not a new one', () => pm.response.to.have.status(200));",
+                  "pm.test('Idempotent-Replayed header', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));",
+                  "pm.test('same order id', () => pm.expect(pm.response.json().order.orderId).to.eql(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{checkoutKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"{{inStockProductId}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "A client that times out and retries with the same key gets the same order back."
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — over the quantity limit (400)",
+          "id": "a4569dd8-57d0-5b69-95b2-eb218ae13732",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400: at most 10 of a product per order', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"p-100\",\n      \"quantity\": 11\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — out of stock (409)",
+          "id": "4d2a88fa-b38b-5041-a77c-450442ef9561",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('error code insufficient_stock', () =>",
+                  "    pm.expect(pm.response.json().error.code).to.eql('insufficient_stock'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"p-103\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "`p-103` is seeded with zero stock. The reservation fails and nothing is created."
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — discontinued product (409)",
+          "id": "568486d5-a7ca-59e1-b706-2cec8add1ecd",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('error code product_unavailable', () =>",
+                  "    pm.expect(pm.response.json().error.code).to.eql('product_unavailable'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"p-104\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — empty bag (400)",
+          "id": "bcd03e0a-ee02-5230-918e-dde2580b8a86",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — unknown field (400)",
+          "id": "8f9a04b2-7164-52f7-869a-982f70b116d6",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400: unknown JSON fields are rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"p-100\",\n      \"quantity\": 1\n    }\n  ],\n  \"price\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Clients can't send prices; bodies are decoded with `DisallowUnknownFields`."
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout — not signed in (401)",
+          "id": "f1983588-3582-5f12-8a02-7c77c2320116",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized without a token', () => pm.response.to.have.status(401));",
+                  "pm.test('WWW-Authenticate: Bearer', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.include('Bearer'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bag/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bag",
+                "checkout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"p-100\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "My orders — spoofed x-user-id, no token (401)",
+          "id": "9d250177-168b-59f5-8c74-88b931729014",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401: identity comes only from a verified token', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-user-id",
+                "value": "alice"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/me/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "me",
+                "orders"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "My orders — forged token (401)",
+          "id": "138c49c7-d9aa-584b-993d-7fde8a9fae5c",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401: the gateway rejects tokens it cannot verify', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/me/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "me",
+                "orders"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "My orders",
+          "id": "5ee6c32f-3026-5344-b240-c0eea1ad012c",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const ids = pm.response.json().orders.map(o => o.orderId);",
+                  "pm.test('includes the order just placed', () => pm.expect(ids).to.include(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/me/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "me",
+                "orders"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "My order",
+          "id": "e32e25ae-be8a-5d77-887c-dd3b82df3c02",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const o = pm.response.json();",
+                  "pm.test('is my order', () => pm.expect(o.orderId).to.eql(pm.collectionVariables.get('orderId')));",
+                  "pm.test('lists items for display', () => pm.expect(o.items[0]).to.match(/^\\d+ × .+/));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{aliceToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/me/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "me",
+                "orders",
+                "{{orderId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Someone else's order (404)",
+          "id": "5a88ebb6-f6de-5aec-9bef-bc1831e140fd",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404: other customers' orders are invisible\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bobToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/me/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "me",
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Ownership is a business-layer rule: it answers 404, not 403, so order ids can't be probed."
+          },
+          "response": []
+        },
+        {
+          "name": "Not routed at the edge (404)",
+          "id": "299fe1b3-5a5d-5c2b-8190-350f19b0612f",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 from Envoy: only /api/* is routed to the BFF', () => pm.response.to.have.status(404));",
+                  "pm.test('JSON error envelope, no Envoy details', () => pm.expect(pm.response.json().error.code).to.eql('not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "The gateway VirtualService only matches `/api/`. Internal endpoints such as `/healthz` are unreachable from outside (Envoy response flag `NR` in the gateway access log)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Business layer — shopping (debug)",
+      "id": "c50fccd4-6f99-5bc9-a361-ed7977778bdc",
+      "description": "**Debug only.** These requests go straight to the pod through `kubectl port-forward` (`make debug-ports`). They skip the sidecar, so mTLS, AuthorizationPolicy, timeouts and retries don't apply. From inside the mesh, only the layer above may call these endpoints.\n\n`{{shoppingUrl}}` → `svc/shopping`.",
+      "item": [
+        {
+          "name": "Browse products",
+          "id": "0cc7f297-bc8f-5275-beff-955b402674f8",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('products carry stock from inventory', () => {",
+                  "    const p = pm.response.json().items[0];",
+                  "    pm.expect(p).to.include.keys('priceCents', 'available', 'inStock');",
+                  "});",
+                  "const inStock = pm.response.json().items.find(p => p.inStock);",
+                  "pm.test('something is in stock (else: kubectl -n meshshop rollout restart deploy/inventory)', () => pm.expect(inStock).to.be.an('object'));",
+                  "if (inStock) pm.collectionVariables.set('inStockProductId', inStock.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{shoppingUrl}}/v1/products",
+              "host": [
+                "{{shoppingUrl}}"
+              ],
+              "path": [
+                "v1",
+                "products"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Product",
+          "id": "c794d791-d249-53ff-b587-30c23eff4db1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{shoppingUrl}}/v1/products/p-100",
+              "host": [
+                "{{shoppingUrl}}"
+              ],
+              "path": [
+                "v1",
+                "products",
+                "p-100"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout",
+          "id": "9fe6d62c-9742-5bd7-ac1b-8dfbd44b215f",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('priced by the catalog and confirmed', () => {",
+                  "    const o = pm.response.json().order;",
+                  "    pm.expect(o.status).to.eql('confirmed');",
+                  "    pm.expect(o.lines[0].unitPriceCents).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{shoppingUrl}}/v1/checkouts",
+              "host": [
+                "{{shoppingUrl}}"
+              ],
+              "path": [
+                "v1",
+                "checkouts"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{userId}}\",\n  \"idempotencyKey\": \"{{$guid}}\",\n  \"items\": [\n    {\n      \"productId\": \"{{inStockProductId}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Customer orders",
+          "id": "1756560c-b027-5ed7-9be5-6de68984fcf2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('every order belongs to the customer', () =>",
+                  "    pm.response.json().items.forEach(o => pm.expect(o.customerId).to.eql(pm.collectionVariables.get('userId') || pm.variables.get('userId'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{shoppingUrl}}/v1/customers/{{userId}}/orders",
+              "host": [
+                "{{shoppingUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customers",
+                "{{userId}}",
+                "orders"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Domain — catalog (debug)",
+      "id": "d0e94b91-4453-5637-a062-b8bd1fac356d",
+      "description": "**Debug only.** These requests go straight to the pod through `kubectl port-forward` (`make debug-ports`). They skip the sidecar, so mTLS, AuthorizationPolicy, timeouts and retries don't apply. From inside the mesh, only the layer above may call these endpoints.\n\n`{{catalogUrl}}` → `svc/catalog`.",
+      "item": [
+        {
+          "name": "List products",
+          "id": "cb3481bf-7ddf-5c58-8439-79e708b4c3fe",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('includes inactive products (filtering is a business rule)', () =>",
+                  "    pm.expect(pm.response.json().items.some(p => p.active === false)).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogUrl}}/v1/products",
+              "host": [
+                "{{catalogUrl}}"
+              ],
+              "path": [
+                "v1",
+                "products"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get products by ids",
+          "id": "763e9fc7-3ead-5b74-a958-1c4f2cb9406c",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('unknown ids are skipped', () =>",
+                  "    pm.expect(pm.response.json().items.map(p => p.id)).to.eql(['p-100', 'p-102']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogUrl}}/v1/products?ids=p-100,p-102,p-999",
+              "host": [
+                "{{catalogUrl}}"
+              ],
+              "path": [
+                "v1",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "ids",
+                  "value": "p-100,p-102,p-999"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get product",
+          "id": "d2ebe0b0-d9f6-5901-b70b-1c185ffc543d",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('price is in cents', () => pm.expect(pm.response.json().priceCents).to.be.a('number'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogUrl}}/v1/products/p-101",
+              "host": [
+                "{{catalogUrl}}"
+              ],
+              "path": [
+                "v1",
+                "products",
+                "p-101"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Domain — inventory (debug)",
+      "id": "65a88e64-84cc-5607-a021-8af1a772ad8a",
+      "description": "**Debug only.** These requests go straight to the pod through `kubectl port-forward` (`make debug-ports`). They skip the sidecar, so mTLS, AuthorizationPolicy, timeouts and retries don't apply. From inside the mesh, only the layer above may call these endpoints.\n\n`{{inventoryUrl}}` → `svc/inventory`. Run in order: the reservation lifecycle is held → committed, and committed is final.",
+      "item": [
+        {
+          "name": "Stock levels",
+          "id": "45834129-cb07-57d0-b74a-ad0a42587067",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items;",
+                  "pm.test('p-103 has no stock', () => pm.expect(items.find(s => s.productId === 'p-103').available).to.eql(0));",
+                  "const avail = items.find(s => s.available > 0);",
+                  "pm.test('something is in stock (else: kubectl -n meshshop rollout restart deploy/inventory)', () => pm.expect(avail).to.be.an('object'));",
+                  "if (avail) pm.collectionVariables.set('stockProductId', avail.productId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/stock?productIds=p-100,p-101,p-102,p-103,p-104",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "stock"
+              ],
+              "query": [
+                {
+                  "key": "productIds",
+                  "value": "p-100,p-101,p-102,p-103,p-104"
+                }
+              ]
+            },
+            "description": "Picks a product that still has stock (`stockProductId`) for the reservation requests below."
+          },
+          "response": []
+        },
+        {
+          "name": "Reserve stock",
+          "id": "2619e8fb-94f1-5e51-9713-3b033663fc22",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('held', () => pm.expect(pm.response.json().status).to.eql('held'));",
+                  "pm.collectionVariables.set('reservationId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/reservations",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "reservations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref\": \"postman\",\n  \"lines\": [\n    {\n      \"productId\": \"{{stockProductId}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reserve stock — all or nothing (409)",
+          "id": "18e8b352-3773-5019-8472-595145377ce8",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409: one short line fails the whole reservation', () => pm.response.to.have.status(409));",
+                  "pm.test('error code insufficient_stock', () => pm.expect(pm.response.json().error.code).to.eql('insufficient_stock'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/reservations",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "reservations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref\": \"postman\",\n  \"lines\": [\n    {\n      \"productId\": \"{{stockProductId}}\",\n      \"quantity\": 1\n    },\n    {\n      \"productId\": \"p-103\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Commit reservation",
+          "id": "17ec7247-c293-5abf-879a-7ab34d5f3ebd",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('committed', () => pm.expect(pm.response.json().status).to.eql('committed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/reservations/{{reservationId}}/commit",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "reservations",
+                "{{reservationId}}",
+                "commit"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Commit again — idempotent",
+          "id": "4c83c0ab-bfe8-5bf6-8adc-8841e352e4e1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200: repeating a transition is a no-op', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/reservations/{{reservationId}}/commit",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "reservations",
+                "{{reservationId}}",
+                "commit"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Release after commit (409)",
+          "id": "f64e3a6b-7405-5fd0-a87f-7c80d2e3d3f3",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409: committed is final', () => pm.response.to.have.status(409));",
+                  "pm.test('error code invalid_transition', () => pm.expect(pm.response.json().error.code).to.eql('invalid_transition'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/v1/reservations/{{reservationId}}/release",
+              "host": [
+                "{{inventoryUrl}}"
+              ],
+              "path": [
+                "v1",
+                "reservations",
+                "{{reservationId}}",
+                "release"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Domain — order (debug)",
+      "id": "08910dfc-7320-5887-9983-1676174a44bb",
+      "description": "**Debug only.** These requests go straight to the pod through `kubectl port-forward` (`make debug-ports`). They skip the sidecar, so mTLS, AuthorizationPolicy, timeouts and retries don't apply. From inside the mesh, only the layer above may call these endpoints.\n\n`{{orderUrl}}` → `svc/order`. Run in order: pending → confirmed, and confirmed is final.",
+      "item": [
+        {
+          "name": "Create order",
+          "id": "e58d14a7-40ac-56de-9945-3fec5f68690c",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const o = pm.response.json();",
+                  "pm.test('pending', () => pm.expect(o.status).to.eql('pending'));",
+                  "pm.test('total computed by the domain (2 × 1299 + 899)', () => pm.expect(o.totalCents).to.eql(3497));",
+                  "pm.collectionVariables.set('debugOrderId', o.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"postman\",\n  \"currency\": \"USD\",\n  \"reservationId\": \"res-none\",\n  \"lines\": [\n    {\n      \"productId\": \"p-100\",\n      \"name\": \"Ceramic Mug\",\n      \"quantity\": 2,\n      \"unitPriceCents\": 1299\n    },\n    {\n      \"productId\": \"p-103\",\n      \"name\": \"Dotted Notebook\",\n      \"quantity\": 1,\n      \"unitPriceCents\": 899\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The order domain trusts the prices it is given; pricing from the catalog is the business layer's job."
+          },
+          "response": []
+        },
+        {
+          "name": "Create order — invalid (400)",
+          "id": "2b499fb2-ff41-5ddc-be8e-100a6c50816e",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400: an order needs a customer and lines', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currency\": \"USD\",\n  \"lines\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get order",
+          "id": "aa2143e8-6054-58a0-94ea-9b4290f4a1e8",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders/{{debugOrderId}}",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "{{debugOrderId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Orders by customer",
+          "id": "de0f4141-ba57-55a4-b750-233c75c2be2a",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('contains the created order', () =>",
+                  "    pm.expect(pm.response.json().items.map(o => o.id)).to.include(pm.collectionVariables.get('debugOrderId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders?customerId=postman",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "customerId",
+                  "value": "postman"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm order",
+          "id": "2ebe9a6a-6c1a-5180-a4a8-2826c42be607",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('confirmed', () => pm.expect(pm.response.json().status).to.eql('confirmed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders/{{debugOrderId}}/confirm",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "{{debugOrderId}}",
+                "confirm"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel after confirm (409)",
+          "id": "c756f736-10ef-593f-a8e4-3b1251c58e6c",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409: confirmed is final', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/v1/orders/{{debugOrderId}}/cancel",
+              "host": [
+                "{{orderUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "{{debugOrderId}}",
+                "cancel"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Sign in alice and bob at Keycloak (password grant on the dev-only meshshop-cli",
+          "// client) and keep their access tokens fresh. Requests send",
+          "// \"Authorization: Bearer {{aliceToken}}\" / \"{{bobToken}}\".",
+          "// Passwords are not stored in the collection: `make postman` passes them in;",
+          "// in the Postman app set alicePassword / bobPassword in the environment",
+          "// (`make users` prints them).",
+          "const base = pm.variables.get('baseUrl');",
+          "const url = pm.variables.replaceIn(pm.request.url.toString());",
+          "if (url.startsWith(base)) {",
+          "    const now = Math.floor(Date.now() / 1000);",
+          "    ['alice', 'bob'].forEach(user => {",
+          "        if (Number(pm.collectionVariables.get(`${user}TokenExp`) || 0) - 30 > now) return;",
+          "        const password = pm.variables.get(`${user}Password`);",
+          "        if (!password) { console.warn(`set ${user}Password (make users) to sign in as ${user}`); return; }",
+          "        pm.sendRequest({",
+          "            url: `${base}/auth/realms/meshshop/protocol/openid-connect/token`,",
+          "            method: 'POST',",
+          "            body: { mode: 'urlencoded', urlencoded: [",
+          "                { key: 'grant_type', value: 'password' }, { key: 'client_id', value: 'meshshop-cli' },",
+          "                { key: 'username', value: user }, { key: 'password', value: password }] },",
+          "        }, (err, res) => {",
+          "            if (err || res.code !== 200) { console.error(`sign-in as ${user} failed`, err || res.text()); return; }",
+          "            const t = res.json();",
+          "            pm.collectionVariables.set(`${user}Token`, t.access_token);",
+          "            pm.collectionVariables.set(`${user}TokenExp`, now + t.expires_in);",
+          "        });",
+          "    });",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Shared checks for every request.",
+          "pm.test('responds within 2s', () => pm.expect(pm.response.responseTime).to.be.below(2000));",
+          "",
+          "const isJSON = (pm.response.headers.get('Content-Type') || '').includes('application/json');",
+          "if (pm.response.code >= 400 && isJSON) {",
+          "    pm.test('error uses the standard envelope {error: {code, message}}', () => {",
+          "        const err = pm.response.json().error;",
+          "        pm.expect(err, 'error').to.be.an('object');",
+          "        pm.expect(err.code, 'error.code').to.be.a('string').and.not.empty;",
+          "        pm.expect(err.message, 'error.message').to.be.a('string');",
+          "    });",
+          "}",
+          "",
+          "// Where to look in Kibana for this request (also in the Postman console). The",
+          "// gateway starts a new trace for every request (client trace headers are",
+          "// dropped) and the BFF names it in the W3C `traceresponse` header.",
+          "const tr = pm.response.headers.get('traceresponse');",
+          "const traceId = tr ? tr.split('-')[1] : '';",
+          "pm.collectionVariables.set('traceId', traceId);",
+          "if (traceId) {",
+          "    const kibana = pm.variables.get('kibanaUrl');",
+          "    const traceUrl = `${kibana}/app/apm/link-to/trace/${traceId}`;",
+          "    const logsUrl = `${kibana}/app/discover#/?_g=(time:(from:now-1h,to:now))` +",
+          "        `&_a=(query:(language:kuery,query:'trace.id:\"${traceId}\"'))`;",
+          "    pm.collectionVariables.set('lastTraceUrl', traceUrl);",
+          "    pm.collectionVariables.set('lastLogsUrl', logsUrl);",
+          "    console.log(`${pm.response.code} ${pm.info.requestName} → ${traceUrl}`);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://meshshop.localhost:8443",
+      "description": "Istio ingress gateway (make gateway)"
+    },
+    {
+      "key": "kibanaUrl",
+      "value": "http://localhost:5601",
+      "description": "Kibana (make kibana)"
+    },
+    {
+      "key": "userId",
+      "value": "alice",
+      "description": "customerId for the debug folders"
+    },
+    {
+      "key": "aliceToken",
+      "value": "",
+      "description": "set by the collection pre-request script"
+    },
+    {
+      "key": "aliceTokenExp",
+      "value": "0"
+    },
+    {
+      "key": "bobToken",
+      "value": "",
+      "description": "set by the collection pre-request script"
+    },
+    {
+      "key": "bobTokenExp",
+      "value": "0"
+    },
+    {
+      "key": "checkoutKey",
+      "value": "",
+      "description": "Idempotency-Key of the last Checkout"
+    },
+    {
+      "key": "shoppingUrl",
+      "value": "http://localhost:18081",
+      "description": "make debug-ports"
+    },
+    {
+      "key": "catalogUrl",
+      "value": "http://localhost:18082",
+      "description": "make debug-ports"
+    },
+    {
+      "key": "inventoryUrl",
+      "value": "http://localhost:18083",
+      "description": "make debug-ports"
+    },
+    {
+      "key": "orderUrl",
+      "value": "http://localhost:18084",
+      "description": "make debug-ports"
+    },
+    {
+      "key": "inStockProductId",
+      "value": "p-100",
+      "description": "set by Home"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "description": "set by Checkout"
+    },
+    {
+      "key": "debugOrderId",
+      "value": "",
+      "description": "set by order debug requests"
+    },
+    {
+      "key": "reservationId",
+      "value": "",
+      "description": "set by Reserve stock"
+    },
+    {
+      "key": "stockProductId",
+      "value": "p-104",
+      "description": "set by Stock levels"
+    },
+    {
+      "key": "traceId",
+      "value": "",
+      "description": "set per request by the pre-request script"
+    },
+    {
+      "key": "lastTraceUrl",
+      "value": ""
+    },
+    {
+      "key": "lastLogsUrl",
+      "value": ""
+    }
+  ]
+}

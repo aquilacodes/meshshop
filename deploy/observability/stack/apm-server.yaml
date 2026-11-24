@@ -1,0 +1,22 @@
+# APM Server: receives OTLP traces (from the OpenTelemetry Collector) and writes
+# them to traces-apm-* / metrics-apm-* data streams for the Kibana APM UI.
+apiVersion: apm.k8s.elastic.co/v1
+kind: ApmServer
+metadata:
+  name: meshshop
+spec:
+  version: 9.5.6
+  count: 1
+  elasticsearchRef:
+    name: meshshop
+  kibanaRef:
+    name: meshshop
+  # TLS on (ECK's self-signed certificate): the collector's secret token never
+  # crosses the network in clear text. The collector trusts ECK's CA.
+  podTemplate:
+    spec:
+      containers:
+        - name: apm-server
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }

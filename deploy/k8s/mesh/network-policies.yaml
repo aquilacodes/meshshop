@@ -1,0 +1,34 @@
+# L3/L4 isolation underneath Istio's L7 policies (needs a CNI that enforces
+# NetworkPolicy; the Makefile starts minikube with Calico).
+#
+# Only the app port is reachable, and only from inside meshshop or from the
+# ingress gateway. Envoy's own ports (15020 merged metrics, 15090 stats, 15000
+# admin) are closed to the rest of the cluster. Kubelet probes come from the
+# node and are always allowed.
+#
+# Which layer may call which is still decided by AuthorizationPolicy on mTLS
+# identities (authorization.yaml); this only stops other namespaces.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-port-from-mesh
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}                  # same namespace
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-ingress }
+          podSelector:
+            matchLabels: { istio: ingressgateway }
+      ports:
+        - { protocol: TCP, port: 8080 }

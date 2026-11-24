@@ -1,0 +1,36 @@
+# L4 exposure of the Istio components (needs a NetworkPolicy-enforcing CNI).
+#
+# istiod: only the xDS/CA and webhook ports. Its metrics port 15014 (mesh
+# topology, config state) is closed to workloads; scrape it from a monitoring
+# namespace by adding a rule here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istiod-ingress
+  namespace: istio-system
+spec:
+  podSelector:
+    matchLabels: { app: istiod }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 15010 }   # xDS (plaintext, legacy)
+        - { protocol: TCP, port: 15012 }   # xDS + CA over mTLS
+        - { protocol: TCP, port: 15017 }   # admission webhooks (API server)
+---
+# Ingress gateway: traffic ports and the readiness port only; Envoy's stats
+# (15020/15090) and admin ports are not reachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: istio-ingress
+spec:
+  podSelector:
+    matchLabels: { istio: ingressgateway }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 80 }
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 15021 }

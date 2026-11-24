@@ -1,0 +1,22 @@
+# Ingress gateway. Release name "istio-ingressgateway" gives pods the label istio=ingressgateway
+# and the ServiceAccount istio-ingressgateway (used in AuthorizationPolicy).
+service:
+  type: ClusterIP
+autoscaling:
+  enabled: false
+replicaCount: 1
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+# Pod security: the chart's defaults plus a seccomp profile, which makes the
+# gateway pod meet the "restricted" Pod Security Standard.
+securityContext:
+  seccompProfile:
+    type: RuntimeDefault
+  sysctls:
+    - name: net.ipv4.ip_unprivileged_port_start
+      value: "0"

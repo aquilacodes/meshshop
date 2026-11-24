@@ -1,0 +1,110 @@
+# Keycloak: the OpenID Connect provider for meshshop customers (realm "meshshop").
+#
+# Public endpoints (login, token, JWKS) are reached through the ingress gateway at
+# https://meshshop.localhost:8443/auth/realms/meshshop/...; the admin console is not routed
+# (use `make keycloak-admin`, a port-forward). Inside the mesh it has STRICT mTLS,
+# and only the gateway and web-bff may call it (mesh.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels: { app: keycloak }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # one pod owns the H2 file
+  selector:
+    matchLabels: { app: keycloak }
+  template:
+    metadata:
+      labels: { app: keycloak }
+    spec:
+      serviceAccountName: keycloak
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001        # not the image's 1000/root group: its files are world-readable
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: keycloak
+          image: meshshop/keycloak:dev     # deploy/identity/Dockerfile (make build)
+          imagePullPolicy: IfNotPresent
+          args: ["start", "--optimized", "--import-realm"]
+          env:
+            # Tokens are issued for the public URL, whatever URL fetched them.
+            - { name: KC_HOSTNAME, value: "https://meshshop.localhost:8443/auth" }
+            - { name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC, value: "true" }   # in-cluster JWKS fetches
+            # TLS ends at the gateway; inside the mesh the sidecar adds mTLS.
+            - { name: KC_HTTP_ENABLED, value: "true" }
+            - { name: KC_PROXY_HEADERS, value: "xforwarded" }            # set by the gateway, not the client
+            - { name: KC_LOG_CONSOLE_OUTPUT, value: "json" }
+            - { name: JAVA_OPTS_KC_HEAP, value: "-XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=30" }
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: keycloak-admin, key: username } }
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: keycloak-admin, key: password } }
+            # Demo users' passwords, substituted into the realm file at import.
+            - name: MESHSHOP_ALICE_PASSWORD
+              valueFrom: { secretKeyRef: { name: meshshop-demo-users, key: alice } }
+            - name: MESHSHOP_BOB_PASSWORD
+              valueFrom: { secretKeyRef: { name: meshshop-demo-users, key: bob } }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 9000 }
+          startupProbe:
+            httpGet: { path: /auth/health/started, port: management }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /auth/health/ready, port: management }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /auth/health/live, port: management }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /opt/keycloak/data }
+            - { name: realm, mountPath: /opt/keycloak/data/import, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        # Realm data, including the token-signing keys, survives restarts: a
+        # restart must not rotate keys under the gateway's JWKS cache (5 min).
+        - name: data
+          persistentVolumeClaim: { claimName: keycloak-data }
+        - name: tmp
+          emptyDir: {}
+        - name: realm
+          configMap: { name: keycloak-realm }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  labels: { app: keycloak }
+spec:
+  selector: { app: keycloak }
+  ports:
+    - { name: http, port: 8080, targetPort: http, appProtocol: http }

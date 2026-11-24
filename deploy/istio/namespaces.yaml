@@ -1,0 +1,13 @@
+# Pod Security Admission for the gateway namespace. The gateway pod needs no
+# privileges (it binds 80/443 via the safe ip_unprivileged_port_start sysctl,
+# and gateway-values.yaml adds the seccomp profile).
+# istio-system stays "privileged": the CNI node agent edits the node's CNI config.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-ingress
+  labels:
+    istio-injection: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

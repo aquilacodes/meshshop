@@ -1,0 +1,102 @@
+# East-west traffic policy. Istio's default retry policy also retries POSTs;
+# here reads are retried and writes are not.
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: shopping
+spec:
+  hosts: [shopping]
+  http:
+    - name: reads
+      match:
+        - method:
+            exact: GET
+      route:
+        - destination: { host: shopping, subset: v1 }
+      timeout: 8s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: connect-failure,refused-stream,unavailable,gateway-error
+    - name: writes
+      route:
+        - destination: { host: shopping, subset: v1 }
+      timeout: 8s
+      retries:
+        attempts: 0              # never blindly retry non-idempotent writes
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: catalog
+spec:
+  hosts: [catalog]
+  http:
+    - name: reads
+      match:
+        - method:
+            exact: GET
+      route:
+        - destination: { host: catalog, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 2
+        perTryTimeout: 700ms
+        retryOn: connect-failure,refused-stream,unavailable,gateway-error
+    - name: writes
+      route:
+        - destination: { host: catalog, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 0              # never blindly retry non-idempotent writes
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: inventory
+spec:
+  hosts: [inventory]
+  http:
+    - name: reads
+      match:
+        - method:
+            exact: GET
+      route:
+        - destination: { host: inventory, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 2
+        perTryTimeout: 700ms
+        retryOn: connect-failure,refused-stream,unavailable,gateway-error
+    - name: writes
+      route:
+        - destination: { host: inventory, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 0              # never blindly retry non-idempotent writes
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: order
+spec:
+  hosts: [order]
+  http:
+    - name: reads
+      match:
+        - method:
+            exact: GET
+      route:
+        - destination: { host: order, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 2
+        perTryTimeout: 700ms
+        retryOn: connect-failure,refused-stream,unavailable,gateway-error
+    - name: writes
+      route:
+        - destination: { host: order, subset: v1 }
+      timeout: 2s
+      retries:
+        attempts: 0              # never blindly retry non-idempotent writes
