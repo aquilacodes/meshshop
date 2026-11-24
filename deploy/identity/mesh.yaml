@@ -1,0 +1,59 @@
+# Who may talk to Keycloak.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-public-endpoints
+spec:
+  selector:
+    matchLabels: { app: keycloak }
+  action: ALLOW
+  rules:
+    # The edge: OIDC endpoints of the meshshop realm only (also the gateway's JWKS fetch).
+    - from:
+        - source:
+            principals: ["cluster.local/ns/istio-ingress/sa/istio-ingressgateway"]
+      to:
+        - operation:
+            paths: ["/auth/realms/meshshop/*", "/auth/resources/*"]
+    # The BFF re-verifies tokens: it needs the signing keys and nothing else.
+    - from:
+        - source:
+            principals: ["cluster.local/ns/meshshop/sa/web-bff"]
+      to:
+        - operation:
+            methods: [GET]
+            paths: ["/auth/realms/meshshop/protocol/openid-connect/certs"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-ingress }
+          podSelector:
+            matchLabels: { istio: ingressgateway }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: meshshop }
+          podSelector:
+            matchLabels: { app: web-bff }
+      ports:
+        - { protocol: TCP, port: 8080 }
